@@ -38,10 +38,30 @@ namespace SimpleMemory
             }
         }
 
+        #region Constructors
         public Memory(Process process)
         {
             Process = process;
         }
+
+        public Memory(int processId)
+        {
+            Process = Process.GetProcessById(processId);
+        }
+
+        public Memory(string processName, int index = 0)
+        {
+            Process[] processes = Process.GetProcessesByName(processName);
+
+            // Check if there are more processes than the user specified
+            if(index > processes.Length)
+            {
+                throw new ArgumentException("Index is higher than the amount of processes found.");
+            }
+
+            Process = processes[index];
+        }
+        #endregion
 
         public IntPtr FollowPointer(IntPtr ptrBase, int[] offsets)
         {
@@ -55,7 +75,6 @@ namespace SimpleMemory
 
             return currentAddress;
         }
-
         public IntPtr FollowPointerSafe(IntPtr ptrBase, int[] offsets)
         {
             // Read our pointerbase first, then add offsets and read it again, etc
