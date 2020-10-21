@@ -22,16 +22,16 @@ namespace SimpleMemory
             }
         }
 
-        private Dictionary<string, IntPtr> _modules = new Dictionary<string, IntPtr>();
-        public Dictionary<string, IntPtr> Modules
+        private Dictionary<string, ProcessModule> _modules = new Dictionary<string, ProcessModule>();
+        public Dictionary<string, ProcessModule> Modules
         {
             get
             {
                 // Go through each module
                 foreach (ProcessModule procModule in Process.Modules)
                 {
-                    // Add it to our dictionary with it's baseaddress
-                    _modules[procModule.ModuleName] = procModule.BaseAddress;
+                    // Add it to our dictionary
+                    _modules[procModule.ModuleName] = procModule;
                 }
 
                 return _modules;
@@ -86,6 +86,62 @@ namespace SimpleMemory
             }
 
             return currentAddress;
+        }
+
+
+        /// <summary>
+        /// Scans for a pattern of bytes inside another process
+        /// </summary>
+        /// <param name="pattern">Pattern of bytes to be scanned for</param>
+        /// <param name="mask">Can be used to mask the pattern, e.g. with "x?xxxx" the 2nd byte is a wildcard and can be anything</param>
+        /// <param name="begin">Start of the pattern scan</param>
+        /// <param name="size">How many bytes to scan</param>
+        /// <returns>IntPtr to the pattern or IntPtr.Zero if no pattern was found</returns>
+        public IntPtr PatternScan(byte[] pattern, char[] mask, IntPtr begin, int size)
+        {
+            // Check if the mask is the same size as the pattern to avoid issues later
+            if(mask.Length != pattern.Length)
+            {
+                throw new ArgumentOutOfRangeException("Mask is not the same length as the pattern.");
+            }
+
+            // If the pattern starts at the last byte of our size we scan that too
+            byte[] buffer = ReadMemorySafe(begin, size);
+
+            // Scan from the module's start address to the module's end address (start + size)
+            for (int offset = 0; offset < size; offset++)
+            {
+                bool found = true;
+                for (int i = 0; i < pattern.Length; i++)
+                {
+                    // Check if the current pattern offset is not a wildcard or incorrect
+                    if(mask[i] != '?' && buffer[offset + i] != pattern[i])
+                    {
+                        found = false;
+                        break;
+                    }
+                }
+                if(found)
+                {
+                    return IntPtr.Add(begin, offset);
+                }
+            }
+
+            // We haven't found our address
+            return IntPtr.Zero;
+        }
+
+        /// <summary>
+        /// Scans a module for a pattern of bytes
+        /// </summary>
+        /// <param name="pattern">Pattern of bytes to be scanned for</param>
+        /// <param name="mask">Can be used to mask the pattern, e.g. with "x?xxxx" the 2nd byte is a wildcard and can be anything</param>
+        /// <param name="module">Module to be scanned</param>
+        /// <returns>IntPtr to the pattern or IntPtr.Zero if no pattern was found</returns>
+        public IntPtr PatternScan(byte[] pattern, char[] mask, ProcessModule module)
+        {
+            // EntryPointAddress is where the code starts, the size after the entrypoint is the total size - the difference between entrypoint and base
+            return PatternScan(pattern, mask, module.EntryPointAddress, module.ModuleMemorySize - Math.Abs((int)module.EntryPointAddress - (int)module.BaseAddress));
         }
 
 
