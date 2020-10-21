@@ -47,9 +47,7 @@ namespace SimpleMemory
                 return obj;
             }
 
-            internal static IntPtr OpenProcess(int processId,
-                Enums.ProcessAccessFlags processAccess = Enums.ProcessAccessFlags.VirtualMemoryOperation | Enums.ProcessAccessFlags.VirtualMemoryRead |
-                Enums.ProcessAccessFlags.VirtualMemoryWrite | Enums.ProcessAccessFlags.Terminate)
+            internal static IntPtr OpenProcess(int processId, Enums.ProcessAccessFlags processAccess)
             {
                 return WrapFunction(() => Win32.OpenProcess(processAccess, false, processId));
             }
@@ -73,7 +71,7 @@ namespace SimpleMemory
                 return WrapFunction(() =>
                 {
                     Win32.VirtualProtectEx(hProcess, lpBaseAddress, dwSize, flNewProtect, out Enums.MemoryProtection lpflOldProtect);
-                    return lpflOldProtect;
+                     return lpflOldProtect;
                 });
             }
 
@@ -81,7 +79,7 @@ namespace SimpleMemory
             {
                 return WrapFunction(() =>
                 {
-                    Win32.VirtualQueryEx(hProcess, lpBaseAddress, out Structs.MemoryBasicInformation lpBuffer, Marshal.SizeOf<Structs.MemoryBasicInformation>());
+                    Win32.VirtualQueryEx(hProcess, lpBaseAddress, out Structs.MemoryBasicInformation lpBuffer, dwLength);
                     return lpBuffer;
                 });
             }

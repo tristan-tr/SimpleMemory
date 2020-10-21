@@ -15,7 +15,7 @@ namespace SimpleMemory
                 public IntPtr BaseAddress;
                 public IntPtr AllocationBase;
                 public Enums.MemoryProtection AllocationProtect;
-                public IntPtr RegionSize;
+                public int RegionSize;
                 public Enums.MemState State;
                 public Enums.MemoryProtection Protect;
                 public Enums.MemType Type;

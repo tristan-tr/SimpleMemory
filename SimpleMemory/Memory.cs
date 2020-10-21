@@ -2,6 +2,8 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -17,7 +19,9 @@ namespace SimpleMemory
             get => _process;
             set
             {
-                Handle = Win32.Wrappers.OpenProcess(value.Id);
+                Handle = Win32.Wrappers.OpenProcess(value.Id, Win32.Enums.ProcessAccessFlags.VirtualMemoryOperation
+                    | Win32.Enums.ProcessAccessFlags.VirtualMemoryRead | Win32.Enums.ProcessAccessFlags.VirtualMemoryWrite
+                    | Win32.Enums.ProcessAccessFlags.QueryInformation);
                 _process = value;
             }
         }
@@ -88,47 +92,64 @@ namespace SimpleMemory
             return currentAddress;
         }
 
-
-        /// <summary>
-        /// Scans for a pattern of bytes inside another process
-        /// </summary>
-        /// <param name="pattern">Pattern of bytes to be scanned for</param>
-        /// <param name="mask">Can be used to mask the pattern, e.g. with "x?xxxx" the 2nd byte is a wildcard and can be anything</param>
-        /// <param name="begin">Start of the pattern scan</param>
-        /// <param name="size">How many bytes to scan</param>
-        /// <returns>IntPtr to the pattern or IntPtr.Zero if no pattern was found</returns>
-        public IntPtr PatternScan(byte[] pattern, char[] mask, IntPtr begin, int size)
+        private bool CheckBufferForPattern(Nullable<byte>[] pattern, byte[] buffer, out int offset)
         {
-            // Check if the mask is the same size as the pattern to avoid issues later
-            if(mask.Length != pattern.Length)
-            {
-                throw new ArgumentOutOfRangeException("Mask is not the same length as the pattern.");
-            }
-
-            // If the pattern starts at the last byte of our size we scan that too
-            byte[] buffer = ReadMemorySafe(begin, size);
-
-            // Scan from the module's start address to the module's end address (start + size)
-            for (int offset = 0; offset < size; offset++)
+            // Scan from the start to end
+            for (offset = 0; offset < buffer.Length; offset++)
             {
                 bool found = true;
                 for (int i = 0; i < pattern.Length; i++)
                 {
-                    // Check if the current pattern offset is not a wildcard or incorrect
-                    if(mask[i] != '?' && buffer[offset + i] != pattern[i])
+                    // Check if the current pattern offset has a value (not a wildcard) and if the current byte matches the pattern
+                    if (pattern[i].HasValue && buffer[offset + i] != pattern[i].Value)
                     {
                         found = false;
                         break;
                     }
                 }
-                if(found)
+                if (found)
                 {
-                    return IntPtr.Add(begin, offset);
+                    return true;
                 }
             }
 
-            // We haven't found our address
-            return IntPtr.Zero;
+            // We haven't found the pattern
+            return false;
+        }
+
+        private Nullable<byte>[] ParsePattern(string pattern)
+        {
+            // Our bytes are split by spaces
+            string[] strBytes = pattern.Split(' ');
+
+            Nullable<byte>[] patternBytes = new Nullable<byte>[strBytes.Length];
+
+            for (int i = 0; i < strBytes.Length; i++)
+            {
+                // Check if the current byte is a wildcard (doesn't contain a byte value)
+                bool isByte = byte.TryParse(strBytes[i], NumberStyles.HexNumber, null, out byte result);
+
+                if (isByte)
+                    patternBytes[i] = result;
+                // The default value is null, so we don't need to set it to null if it is a wildcard
+            }
+
+            return patternBytes;
+        }
+
+        /// <summary>
+        /// Scans for a pattern of bytes inside another process
+        /// </summary>
+        /// <param name="pattern">Pattern of bytes to be scanned for</param>
+        /// <returns>IntPtr to the pattern or IntPtr.Zero if no pattern was found</returns>
+        public IntPtr PatternScan(string pattern)
+        {
+            // Just scan every part of memory of the process
+            IntPtr startAddress = IntPtr.Zero;
+            // Scan to the end of the memory
+            int endAddress = Process.VirtualMemorySize;
+
+            return PatternScan(pattern, startAddress, endAddress);
         }
 
         /// <summary>
@@ -138,10 +159,50 @@ namespace SimpleMemory
         /// <param name="mask">Can be used to mask the pattern, e.g. with "x?xxxx" the 2nd byte is a wildcard and can be anything</param>
         /// <param name="module">Module to be scanned</param>
         /// <returns>IntPtr to the pattern or IntPtr.Zero if no pattern was found</returns>
-        public IntPtr PatternScan(byte[] pattern, char[] mask, ProcessModule module)
+        public IntPtr PatternScan(string pattern, ProcessModule module)
         {
-            // EntryPointAddress is where the code starts, the size after the entrypoint is the total size - the difference between entrypoint and base
-            return PatternScan(pattern, mask, module.EntryPointAddress, module.ModuleMemorySize - Math.Abs((int)module.EntryPointAddress - (int)module.BaseAddress));
+            // EntryPointAddress is where the code starts
+            IntPtr startAddress = module.EntryPointAddress;
+            // The size after the entrypoint is the total size - the difference between entrypoint and base
+            int endAddress = module.ModuleMemorySize - Math.Abs((int)module.EntryPointAddress - (int)module.BaseAddress);
+
+            return PatternScan(pattern, startAddress, endAddress);
+        }
+
+        public IntPtr PatternScan(string pattern, IntPtr startAddress, int endAddress)
+        {
+            // Parse our pattern
+            Nullable<byte>[] parsedPattern = ParsePattern(pattern);
+
+            // Loop through every memory region seperately
+            Win32.Structs.MemoryBasicInformation memoryBasicInformation = new Win32.Structs.MemoryBasicInformation();
+            do
+            {
+                memoryBasicInformation = Win32.Wrappers.VirtualQueryEx(Handle, startAddress, Marshal.SizeOf(memoryBasicInformation));
+
+                // Check if the memory has data and if its not readable
+                if (memoryBasicInformation.State == Win32.Enums.MemState.MEM_COMMIT
+                    && memoryBasicInformation.Protect != Win32.Enums.MemoryProtection.PAGE_NOACCESS
+                    && memoryBasicInformation.Protect != Win32.Enums.MemoryProtection.PAGE_GUARD
+                    && memoryBasicInformation.Type != Win32.Enums.MemType.MEM_MAPPED)
+                {
+                    // Read this region
+                    byte[] buffer = ReadMemorySafe(startAddress, memoryBasicInformation.RegionSize);
+
+                    // Check if our pattern is in here
+                    if (CheckBufferForPattern(parsedPattern, buffer, out int offset))
+                    {
+                        // Return the address we found our pattern at
+                        return memoryBasicInformation.BaseAddress + offset;
+                    }
+                }
+
+                // Go to the next memory region
+                startAddress = IntPtr.Add(startAddress, memoryBasicInformation.RegionSize);
+            } while ((int)startAddress < (int)endAddress);
+
+            // We haven't found our pattern
+            return IntPtr.Zero;
         }
 
 
